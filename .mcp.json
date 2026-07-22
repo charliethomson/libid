@@ -1,0 +1,5 @@
+{
+  "//": "Root .mcp.json for a repo that vendors the standards submodule. Reference shared servers by their standards/mcp/<name> path. Pass secrets via env (${VAR}), never inline. See standards/docs/skills-and-mcp.md.",
+  "mcpServers": {
+  }
+}

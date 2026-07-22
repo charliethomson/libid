@@ -1,0 +1,61 @@
+# CI gate: build · clippy · test across the feature matrix, then tarpaulin
+# coverage (threshold in ./tarpaulin.toml). Runs on the Linux docker agents.
+when:
+  - event: manual
+  - event: push
+    branch: main
+    path: &rust_paths
+      include:
+        - "libid/**"
+        - "Cargo.toml"
+        - "Cargo.lock"
+        - "tarpaulin.toml"
+        - ".woodpecker/rust.ci.yml"
+  - event: pull_request
+    path: *rust_paths
+
+labels:
+  # Pin to the docker agents. An unlabelled pipeline can be round-robined onto
+  # the local macOS/Windows agents, which treat `image:` as a host executable.
+  platform: linux/amd64
+
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      # The private standards submodule rewritten to HTTPS (reuses the forge token).
+      submodule_override:
+        standards: https://github.com/charliethomson/standards.git
+
+variables:
+  - &rust_image rust:1-bookworm
+  - &rust_env
+    CARGO_TERM_COLOR: always
+    CARGO_INCREMENTAL: "0"
+
+steps:
+  build:
+    image: *rust_image
+    environment:
+      <<: *rust_env
+    commands:
+      - rustup component add clippy
+      # No features / defaults / everything — consumers pick arbitrary feature
+      # sets, so each boundary must build and pass clippy on its own.
+      - cargo build --workspace --all-targets --no-default-features
+      - cargo build --workspace --all-targets
+      - cargo build --workspace --all-targets --all-features
+      - cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - cargo test --workspace --all-features
+
+  coverage:
+    image: *rust_image
+    environment:
+      <<: *rust_env
+    commands:
+      - rustup component add llvm-tools-preview
+      - cargo install cargo-tarpaulin --locked
+      # --engine llvm: the default ptrace engine can't disable ASLR in a
+      # container (EPERM) without the security trust level. Threshold and
+      # feature selection come from ./tarpaulin.toml.
+      - cargo tarpaulin --engine llvm --out Xml

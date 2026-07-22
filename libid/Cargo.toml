@@ -1,0 +1,31 @@
+[package]
+name = "libid"
+version.workspace = true
+edition.workspace = true
+description = "Typed entity identifiers for the fleet: Id<T> (internal UUIDv7) and PublicId<T> (URL-facing Crockford Base32 alias)."
+
+[features]
+default = ["serde"]
+# Transport: serialize as canonical strings, normalize on the way in.
+serde = ["dep:serde"]
+# Storage (SQLite): Id<T> binds as BLOB (delegating to Uuid), PublicId<T> as TEXT.
+sqlx = ["dep:sqlx"]
+# Contract: both types are opaque strings in the OpenAPI schema.
+poem-openapi = ["dep:poem-openapi", "dep:serde_json"]
+
+[dependencies]
+rand.workspace = true
+uuid.workspace = true
+
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+poem-openapi = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio"] }
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

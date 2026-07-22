@@ -1,0 +1,4 @@
+/target
+.cov/
+.DS_Store
+cobertura.xml

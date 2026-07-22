@@ -1,0 +1,12 @@
+# Coverage config for `cargo tarpaulin` (enforced in CI).
+# Pure-logic library: everything is unit-testable, so hold the service-standard
+# 80% floor (see standards/docs/testing.md) even though libraries have no hard
+# gate by default.
+[default]
+workspace = true
+all-features = true
+# examples are documentation, not coverage targets; the standards submodule's
+# template .rs files aren't part of this crate at all
+exclude-files = ["libid/examples/*", "standards/*"]
+timeout = "120s"
+fail-under = 80
