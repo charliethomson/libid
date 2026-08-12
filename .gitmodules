@@ -1,3 +1,31 @@
+; HTTPS, not ssh://, and deliberately — do not "fix" this back.
+;
+; `libid` is consumed as a cargo git dependency, and cargo checks out a git
+; dependency's submodules. An ssh:// URL here therefore makes every consumer —
+; and every build agent resolving one — need SSH credentials for a second repo,
+; to obtain a directory of markdown that no compiled crate reads. Six repos take
+; `libid` over `https://…/libid`, so the fetch of `libid` itself succeeds
+; anonymously and then fails on the recursion: `failed to fetch submodule
+; 'standards'`, exit 101, before a single crate compiles. It is invisible on a
+; warm machine, because `$CARGO_HOME/git/db` already holds `standards-<hash>`
+; from an earlier build; it fails on a cold CARGO_HOME, which is what a fresh
+; build agent is. Proven both ways in THM-378.
+;
+; Other repos in the fleet keep ssh:// here and rewrite it per pipeline with
+; woodpecker plugin-git's `submodule_override` — including this repo's own
+; `.woodpecker/rust.ci.yml`, where it is now redundant but harmless. That escape
+; hatch is a property of the *fetcher*. When the fetcher is Woodpecker it works;
+; when the fetcher is cargo resolving a git dependency there is no override at
+; all, and the consumer cannot opt out. Being a library changes which layer is
+; allowed to hold the workaround.
+;
+; `standards` is public, so an anonymous HTTPS read works for everyone, and
+; humans with keys are unaffected because HTTPS reads work for them too.
+;
+; Existing clones need `git submodule sync` — changing this file alone does not
+; update `.git/config`'s `submodule.standards.url` or the submodule's own
+; `remote.origin.url`. A fresh clone, and every cargo consumer, reads this file
+; directly and needs nothing.
 [submodule "standards"]
 	path = standards
-	url = git@github.com:charliethomson/standards
+	url = https://github.com/charliethomson/standards.git
