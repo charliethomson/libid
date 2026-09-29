@@ -10,7 +10,7 @@ Two types, one boundary rule:
 |---|---|---|
 | What | UUIDv7 tagged with its entity | 11-char Crockford Base32 alias (55 bits) |
 | Where | internal only — `core`/`db`/`engine`, PKs, sorting, pagination | the *only* id in URLs, JSON, events |
-| Storage | `BLOB` primary key | `TEXT NOT NULL UNIQUE` beside the PK |
+| Storage | binary primary key (see [Storage](#storage)) | unique string beside the PK |
 | Ordering | time-ordered — sort/paginate on this | random — never sort or paginate on it |
 
 The exposer layer (the poem API) translates between them: inbound
@@ -45,6 +45,26 @@ assert_eq!(same, public);
 
 See [`libid/examples/basic.rs`](libid/examples/basic.rs) for the walkthrough.
 
+## Storage
+
+The column types differ per backend — copy the row for yours:
+
+| | SQLite (`sqlx`) | MySQL / MariaDB (`mysql`) |
+|---|---|---|
+| `Id<T>` | `BLOB PRIMARY KEY` | `BINARY(16) PRIMARY KEY` |
+| `PublicId<T>` | `TEXT NOT NULL UNIQUE` | `VARCHAR(16) NOT NULL UNIQUE` |
+
+- **`PublicId<T>` is `VARCHAR`, not `TEXT`, on MySQL.** MySQL rejects a
+  `UNIQUE` index on a `TEXT` column without a prefix length (error 1170), so the
+  SQLite schema fails there at migration time. (MariaDB accepts it through a
+  hash-based long unique key; `VARCHAR` is portable and a plain B-tree index.)
+  `16` fits the bare 11-char code and any `PREFIX` of up to four characters
+  (`<prefix>_<code>`); widen it to `PREFIX.len() + 12` for longer prefixes.
+- **`Id<T>` is the 16 raw bytes on both backends, never the 36-char text
+  form.** An existing `CHAR(36)`/`TEXT` uuid column is not an `Id<T>` column:
+  it type-checks but fails to decode. Migrate it to binary (e.g.
+  `UNHEX(REPLACE(id, '-', ''))` on MySQL) rather than binding a string.
+
 ## Features
 
 - **`serde`** (default) — both types serialize as their canonical strings;
@@ -53,6 +73,9 @@ See [`libid/examples/basic.rs`](libid/examples/basic.rs) for the walkthrough.
 - **`sqlx`** — SQLite bindings: `Id<T>` binds/decodes as `BLOB` (delegating to
   `Uuid`), `PublicId<T>` as canonical `TEXT`. Bind the typed values directly —
   no `.to_string()` at call sites.
+- **`mysql`** — MySQL/MariaDB bindings: `Id<T>` as `BINARY(16)` (delegating to
+  `Uuid`), `PublicId<T>` as canonical `VARCHAR`. Independent of `sqlx`: enable
+  either or both, and only the chosen driver is compiled.
 - **`poem-openapi`** — `Type`/`ParseFromJSON`/`ParseFromParameter`/`ToJSON` for
   both, so they appear as opaque strings in the OpenAPI contract.
 
@@ -65,6 +88,20 @@ See [`libid/examples/basic.rs`](libid/examples/basic.rs) for the walkthrough.
   `standards/docs/public-ids.md`.
 - **Resolve methods** — `Db::resolve_<entity>(&PublicId<E>) -> Result<Id<E>>`,
   mapping a miss to your standard not-found error.
+
+## Tests
+
+```sh
+cargo test --all-features
+```
+
+The MySQL round-trip needs a live server, so it's `#[ignore]`d by default. Point
+it at a scratch MySQL or MariaDB database (it only creates `TEMPORARY` tables):
+
+```sh
+LIBID_TEST_MYSQL_URL=mysql://user:pass@localhost/scratch \
+  cargo test --features mysql -- --ignored
+```
 
 ## Coverage
 

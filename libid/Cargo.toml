@@ -9,7 +9,10 @@ default = ["serde"]
 # Transport: serialize as canonical strings, normalize on the way in.
 serde = ["dep:serde"]
 # Storage (SQLite): Id<T> binds as BLOB (delegating to Uuid), PublicId<T> as TEXT.
-sqlx = ["dep:sqlx"]
+sqlx = ["dep:sqlx", "sqlx?/sqlite"]
+# Storage (MySQL/MariaDB): Id<T> binds as BINARY(16) (delegating to Uuid),
+# PublicId<T> as VARCHAR. Independent of `sqlx`, so each backend is opt-in.
+mysql = ["dep:sqlx", "sqlx?/mysql"]
 # Contract: both types are opaque strings in the OpenAPI schema.
 poem-openapi = ["dep:poem-openapi", "dep:serde_json"]
 

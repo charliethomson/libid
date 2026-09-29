@@ -13,7 +13,7 @@ rand = { version = "0.9" }
 uuid = { version = "1", features = ["v7"] }
 serde = { version = "1" }
 serde_json = { version = "1" }
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "uuid"] }
+sqlx = { version = "0.8", default-features = false, features = ["uuid"] }
 poem-openapi = { version = "5" }
 
 [workspace.lints.clippy]

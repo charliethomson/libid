@@ -145,6 +145,35 @@ impl<'r, T> sqlx::Decode<'r, sqlx::Sqlite> for Id<T> {
     }
 }
 
+// ── sqlx (MySQL/MariaDB): delegate to Uuid, so ids store as BINARY(16) ──────
+// Same delegation as SQLite: the 16 raw bytes, never the 36-char text form. A
+// `CHAR(36)` column type-checks (sqlx lets `[u8]` read string columns) but
+// fails at decode with a length error, so the schema must be `BINARY(16)`.
+#[cfg(feature = "mysql")]
+impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
+    fn type_info() -> sqlx::mysql::MySqlTypeInfo {
+        <Uuid as sqlx::Type<sqlx::MySql>>::type_info()
+    }
+    fn compatible(ty: &sqlx::mysql::MySqlTypeInfo) -> bool {
+        <Uuid as sqlx::Type<sqlx::MySql>>::compatible(ty)
+    }
+}
+#[cfg(feature = "mysql")]
+impl<T> sqlx::Encode<'_, sqlx::MySql> for Id<T> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <Uuid as sqlx::Encode<'_, sqlx::MySql>>::encode_by_ref(&self.raw, buf)
+    }
+}
+#[cfg(feature = "mysql")]
+impl<'r, T> sqlx::Decode<'r, sqlx::MySql> for Id<T> {
+    fn decode(value: sqlx::mysql::MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        Ok(Self::from_uuid(<Uuid as sqlx::Decode<sqlx::MySql>>::decode(value)?))
+    }
+}
+
 // ── poem-openapi: a `string` (uuid) in the contract ──────────────────────────
 #[cfg(feature = "poem-openapi")]
 mod poem_impls {
@@ -267,6 +296,27 @@ mod tests {
         let back: Id<Widget> = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(id, back);
         assert!(serde_json::from_str::<Id<Widget>>("\"nope\"").is_err());
+    }
+
+    // Decode needs a live row (MySqlValueRef has no public constructor); that
+    // path is covered by the MySQL round-trip in `lib.rs`.
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_binds_as_the_16_raw_bytes() {
+        use sqlx::{Encode, MySql, Type, TypeInfo};
+        let id = Id::<Widget>::new();
+        assert_eq!(
+            <Id<Widget> as Type<MySql>>::type_info().name(),
+            <Uuid as Type<MySql>>::type_info().name()
+        );
+        assert!(<Id<Widget> as Type<MySql>>::compatible(&<Uuid as Type<MySql>>::type_info()));
+        let mut buf = Vec::new();
+        let null = <Id<Widget> as Encode<MySql>>::encode_by_ref(&id, &mut buf).expect("encode");
+        assert!(matches!(null, sqlx::encode::IsNull::No));
+        // Length-encoded: one length byte (16), then the raw UUID bytes.
+        assert_eq!(buf.len(), 17);
+        assert_eq!(buf[0], 16);
+        assert_eq!(&buf[1..], id.as_uuid().as_bytes());
     }
 
     #[cfg(feature = "poem-openapi")]

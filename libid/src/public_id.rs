@@ -237,6 +237,36 @@ impl<'r, T: PublicEntity> sqlx::Decode<'r, sqlx::Sqlite> for PublicId<T> {
     }
 }
 
+// ── sqlx (MySQL/MariaDB): stored as the canonical VARCHAR form ───────────────
+// VARCHAR, not TEXT: MySQL/MariaDB can't put a UNIQUE index on a TEXT column
+// without a prefix length. `VARCHAR(16)` holds the bare 11-char code and any
+// prefix of up to four characters (`<prefix>_<code>`).
+#[cfg(feature = "mysql")]
+impl<T> sqlx::Type<sqlx::MySql> for PublicId<T> {
+    fn type_info() -> sqlx::mysql::MySqlTypeInfo {
+        <String as sqlx::Type<sqlx::MySql>>::type_info()
+    }
+    fn compatible(ty: &sqlx::mysql::MySqlTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::MySql>>::compatible(ty)
+    }
+}
+#[cfg(feature = "mysql")]
+impl<T: PublicEntity> sqlx::Encode<'_, sqlx::MySql> for PublicId<T> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as sqlx::Encode<'_, sqlx::MySql>>::encode(self.to_string(), buf)
+    }
+}
+#[cfg(feature = "mysql")]
+impl<'r, T: PublicEntity> sqlx::Decode<'r, sqlx::MySql> for PublicId<T> {
+    fn decode(value: sqlx::mysql::MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<sqlx::MySql>>::decode(value)?;
+        s.parse().map_err(|e: ParseError| Box::new(e) as sqlx::error::BoxDynError)
+    }
+}
+
 // ── poem-openapi: an opaque string in the contract ───────────────────────────
 #[cfg(feature = "poem-openapi")]
 mod poem_impls {
@@ -466,6 +496,24 @@ mod tests {
         assert!(json.starts_with("\"wgt_"));
         let back: PublicId<Widget> = serde_json::from_str(&json).unwrap();
         assert_eq!(w, back);
+    }
+
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_binds_as_canonical_varchar() {
+        use sqlx::{Encode, MySql, Type, TypeInfo};
+        assert_eq!(<PublicId<Widget> as Type<MySql>>::type_info().name(), "VARCHAR");
+        let p = PublicId::<Widget>::new();
+        let canonical = p.to_string();
+        // The prefixed form of a four-char-or-shorter prefix fits VARCHAR(16).
+        assert!(canonical.len() <= 16);
+        let mut buf = Vec::new();
+        let null =
+            <PublicId<Widget> as Encode<MySql>>::encode_by_ref(&p, &mut buf).expect("encode");
+        assert!(matches!(null, sqlx::encode::IsNull::No));
+        // Length-encoded string: one length byte, then the canonical text.
+        assert_eq!(usize::from(buf[0]), canonical.len());
+        assert_eq!(&buf[1..], canonical.as_bytes());
     }
 
     #[cfg(feature = "poem-openapi")]
