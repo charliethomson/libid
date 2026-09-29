@@ -49,33 +49,45 @@ See [`libid/examples/basic.rs`](libid/examples/basic.rs) for the walkthrough.
 
 The column types differ per backend — copy the row for yours:
 
-| | SQLite (`sqlx`) | MySQL / MariaDB (`mysql`) |
-|---|---|---|
-| `Id<T>` | `BLOB PRIMARY KEY` | `BINARY(16) PRIMARY KEY` |
-| `PublicId<T>` | `TEXT NOT NULL UNIQUE` | `VARCHAR(16) NOT NULL UNIQUE` |
+| | SQLite (`sqlite`) | MySQL / MariaDB (`mysql`) | PostgreSQL (`postgres`) |
+|---|---|---|---|
+| `Id<T>` | `BLOB PRIMARY KEY` | `BINARY(16) PRIMARY KEY` | `UUID PRIMARY KEY` |
+| `PublicId<T>` | `TEXT NOT NULL UNIQUE` | `VARCHAR(16) NOT NULL UNIQUE` | `TEXT NOT NULL UNIQUE` |
 
 - **`PublicId<T>` is `VARCHAR`, not `TEXT`, on MySQL.** MySQL rejects a
   `UNIQUE` index on a `TEXT` column without a prefix length (error 1170), so the
-  SQLite schema fails there at migration time. (MariaDB accepts it through a
-  hash-based long unique key; `VARCHAR` is portable and a plain B-tree index.)
-  `16` fits the bare 11-char code and any `PREFIX` of up to four characters
-  (`<prefix>_<code>`); widen it to `PREFIX.len() + 12` for longer prefixes.
-- **`Id<T>` is the 16 raw bytes on both backends, never the 36-char text
-  form.** An existing `CHAR(36)`/`TEXT` uuid column is not an `Id<T>` column:
-  it type-checks but fails to decode. Migrate it to binary (e.g.
-  `UNHEX(REPLACE(id, '-', ''))` on MySQL) rather than binding a string.
+  SQLite/Postgres schema fails there at migration time. (MariaDB accepts it
+  through a hash-based long unique key; `VARCHAR` is portable and a plain B-tree
+  index.) `16` fits the bare 11-char code and any `PREFIX` of up to four
+  characters (`<prefix>_<code>`); widen it to `PREFIX.len() + 12` for longer
+  prefixes. Postgres has no such limit, and `TEXT` is its idiomatic string type
+  (`VARCHAR(n)` columns decode too).
+- **`Id<T>` is never the 36-char text form.** SQLite and MySQL store the 16 raw
+  bytes; Postgres uses its native `UUID`. An existing `CHAR(36)`/`TEXT` uuid
+  column is not an `Id<T>` column: on MySQL it type-checks but fails to decode,
+  on SQLite and Postgres it's a type mismatch. Migrate the column (e.g.
+  `UNHEX(REPLACE(id, '-', ''))` on MySQL, `id::uuid` on Postgres) rather than
+  binding a string.
+- **Postgres arrays:** both types implement `PgHasArrayType` (`UUID[]` /
+  `TEXT[]`), so a `Vec<Id<T>>` or `Vec<PublicId<T>>` binds for
+  `WHERE id = ANY($1)`.
+- **`sqlx::Any` is not supported.** sqlx 0.8's `Any` driver has no uuid type:
+  an `Id<T>` could only travel as a blob, which matches SQLite `BLOB` and MySQL
+  `BINARY(16)` but not a Postgres `UUID` column, so a portable impl would be
+  wrong on one backend. Enable the concrete backend features instead.
 
 ## Features
 
 - **`serde`** (default) — both types serialize as their canonical strings;
   deserialization goes through `parse`, so confusable spellings normalize on the
   way in.
-- **`sqlx`** — SQLite bindings: `Id<T>` binds/decodes as `BLOB` (delegating to
-  `Uuid`), `PublicId<T>` as canonical `TEXT`. Bind the typed values directly —
-  no `.to_string()` at call sites.
-- **`mysql`** — MySQL/MariaDB bindings: `Id<T>` as `BINARY(16)` (delegating to
-  `Uuid`), `PublicId<T>` as canonical `VARCHAR`. Independent of `sqlx`: enable
-  either or both, and only the chosen driver is compiled.
+- **`sqlite`**, **`mysql`**, **`postgres`** — sqlx `Type`/`Encode`/`Decode` for
+  that backend, with the column types in [Storage](#storage). Each is
+  independent and compiles only its own driver; enable any combination. Bind
+  the typed values directly — no `.to_string()` at call sites.
+- **`sqlx-all`** — all three backends.
+- **`sqlx`** — *legacy* alias for `sqlite`, from before the other backends
+  existed. Kept for compatibility; new code should say `sqlite`.
 - **`poem-openapi`** — `Type`/`ParseFromJSON`/`ParseFromParameter`/`ToJSON` for
   both, so they appear as opaque strings in the OpenAPI contract.
 
@@ -95,12 +107,14 @@ The column types differ per backend — copy the row for yours:
 cargo test --all-features
 ```
 
-The MySQL round-trip needs a live server, so it's `#[ignore]`d by default. Point
-it at a scratch MySQL or MariaDB database (it only creates `TEMPORARY` tables):
+The MySQL and Postgres round-trips need a live server, so they're `#[ignore]`d
+by default. Point them at scratch databases (they only create `TEMPORARY`
+tables); the MySQL suite runs against MySQL or MariaDB:
 
 ```sh
 LIBID_TEST_MYSQL_URL=mysql://user:pass@localhost/scratch \
-  cargo test --features mysql -- --ignored
+LIBID_TEST_POSTGRES_URL=postgres://user:pass@localhost/scratch \
+  cargo test --all-features -- --ignored
 ```
 
 ## Coverage

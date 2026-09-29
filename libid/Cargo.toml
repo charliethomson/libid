@@ -8,11 +8,17 @@ description = "Typed entity identifiers for the fleet: Id<T> (internal UUIDv7) a
 default = ["serde"]
 # Transport: serialize as canonical strings, normalize on the way in.
 serde = ["dep:serde"]
-# Storage (SQLite): Id<T> binds as BLOB (delegating to Uuid), PublicId<T> as TEXT.
-sqlx = ["dep:sqlx", "sqlx?/sqlite"]
-# Storage (MySQL/MariaDB): Id<T> binds as BINARY(16) (delegating to Uuid),
-# PublicId<T> as VARCHAR. Independent of `sqlx`, so each backend is opt-in.
+# Storage, one feature per sqlx backend; each compiles only its own driver.
+# SQLite: Id<T> binds as BLOB (delegating to Uuid), PublicId<T> as TEXT.
+sqlite = ["dep:sqlx", "sqlx?/sqlite"]
+# MySQL/MariaDB: Id<T> binds as BINARY(16) (delegating to Uuid), PublicId<T> as VARCHAR.
 mysql = ["dep:sqlx", "sqlx?/mysql"]
+# PostgreSQL: Id<T> binds as native UUID (delegating to Uuid), PublicId<T> as TEXT.
+postgres = ["dep:sqlx", "sqlx?/postgres"]
+# Every backend above.
+sqlx-all = ["sqlite", "mysql", "postgres"]
+# Legacy alias for `sqlite` (it predates the other backends); prefer `sqlite`.
+sqlx = ["sqlite"]
 # Contract: both types are opaque strings in the OpenAPI schema.
 poem-openapi = ["dep:poem-openapi", "dep:serde_json"]
 

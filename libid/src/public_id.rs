@@ -211,7 +211,7 @@ impl<'de, T: PublicEntity> serde::Deserialize<'de> for PublicId<T> {
 }
 
 // ── sqlx (SQLite): stored as the canonical TEXT form ─────────────────────────
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "sqlite")]
 impl<T> sqlx::Type<sqlx::Sqlite> for PublicId<T> {
     fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
         <String as sqlx::Type<sqlx::Sqlite>>::type_info()
@@ -220,7 +220,7 @@ impl<T> sqlx::Type<sqlx::Sqlite> for PublicId<T> {
         <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
     }
 }
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "sqlite")]
 impl<'q, T: PublicEntity> sqlx::Encode<'q, sqlx::Sqlite> for PublicId<T> {
     fn encode_by_ref(
         &self,
@@ -229,7 +229,7 @@ impl<'q, T: PublicEntity> sqlx::Encode<'q, sqlx::Sqlite> for PublicId<T> {
         <String as sqlx::Encode<'q, sqlx::Sqlite>>::encode(self.to_string(), buf)
     }
 }
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "sqlite")]
 impl<'r, T: PublicEntity> sqlx::Decode<'r, sqlx::Sqlite> for PublicId<T> {
     fn decode(value: sqlx::sqlite::SqliteValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <String as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
@@ -263,6 +263,42 @@ impl<T: PublicEntity> sqlx::Encode<'_, sqlx::MySql> for PublicId<T> {
 impl<'r, T: PublicEntity> sqlx::Decode<'r, sqlx::MySql> for PublicId<T> {
     fn decode(value: sqlx::mysql::MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <&str as sqlx::Decode<sqlx::MySql>>::decode(value)?;
+        s.parse().map_err(|e: ParseError| Box::new(e) as sqlx::error::BoxDynError)
+    }
+}
+
+// ── sqlx (PostgreSQL): stored as the canonical TEXT form ────────────────────
+// TEXT is idiomatic here (same storage as VARCHAR, and UNIQUE on TEXT is fine);
+// decoding also accepts VARCHAR/CHAR columns.
+#[cfg(feature = "postgres")]
+impl<T> sqlx::Type<sqlx::Postgres> for PublicId<T> {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+// `TEXT[]`, so a `Vec<PublicId<T>>` binds for `WHERE public_id = ANY($1)`.
+#[cfg(feature = "postgres")]
+impl<T> sqlx::postgres::PgHasArrayType for PublicId<T> {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::postgres::PgHasArrayType>::array_type_info()
+    }
+}
+#[cfg(feature = "postgres")]
+impl<T: PublicEntity> sqlx::Encode<'_, sqlx::Postgres> for PublicId<T> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as sqlx::Encode<'_, sqlx::Postgres>>::encode(self.to_string(), buf)
+    }
+}
+#[cfg(feature = "postgres")]
+impl<'r, T: PublicEntity> sqlx::Decode<'r, sqlx::Postgres> for PublicId<T> {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
         s.parse().map_err(|e: ParseError| Box::new(e) as sqlx::error::BoxDynError)
     }
 }
@@ -514,6 +550,26 @@ mod tests {
         // Length-encoded string: one length byte, then the canonical text.
         assert_eq!(usize::from(buf[0]), canonical.len());
         assert_eq!(&buf[1..], canonical.as_bytes());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn postgres_binds_as_text() {
+        use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
+        use sqlx::{Postgres, Type};
+        assert_eq!(<PublicId<Widget> as Type<Postgres>>::type_info(), PgTypeInfo::with_name("TEXT"));
+        assert!(<PublicId<Widget> as Type<Postgres>>::compatible(&PgTypeInfo::with_name("VARCHAR")));
+        assert_eq!(
+            <PublicId<Widget> as PgHasArrayType>::array_type_info(),
+            <String as PgHasArrayType>::array_type_info()
+        );
+        // Binary protocol: the canonical text, no length prefix.
+        let p = PublicId::<Widget>::new();
+        let mut buf = sqlx::postgres::PgArgumentBuffer::default();
+        let null = <PublicId<Widget> as sqlx::Encode<Postgres>>::encode_by_ref(&p, &mut buf)
+            .expect("encode");
+        assert!(matches!(null, sqlx::encode::IsNull::No));
+        assert_eq!(&buf[..], p.to_string().as_bytes());
     }
 
     #[cfg(feature = "poem-openapi")]

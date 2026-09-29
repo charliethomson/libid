@@ -120,7 +120,7 @@ impl<'de, T> serde::Deserialize<'de> for Id<T> {
 }
 
 // ── sqlx (SQLite): delegate to Uuid, so ids store as BLOB ────────────────────
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "sqlite")]
 impl<T> sqlx::Type<sqlx::Sqlite> for Id<T> {
     fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
         <Uuid as sqlx::Type<sqlx::Sqlite>>::type_info()
@@ -129,7 +129,7 @@ impl<T> sqlx::Type<sqlx::Sqlite> for Id<T> {
         <Uuid as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
     }
 }
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "sqlite")]
 impl<'q, T> sqlx::Encode<'q, sqlx::Sqlite> for Id<T> {
     fn encode_by_ref(
         &self,
@@ -138,7 +138,7 @@ impl<'q, T> sqlx::Encode<'q, sqlx::Sqlite> for Id<T> {
         <Uuid as sqlx::Encode<'q, sqlx::Sqlite>>::encode_by_ref(&self.raw, buf)
     }
 }
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "sqlite")]
 impl<'r, T> sqlx::Decode<'r, sqlx::Sqlite> for Id<T> {
     fn decode(value: sqlx::sqlite::SqliteValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         Ok(Self::from_uuid(<Uuid as sqlx::Decode<sqlx::Sqlite>>::decode(value)?))
@@ -171,6 +171,41 @@ impl<T> sqlx::Encode<'_, sqlx::MySql> for Id<T> {
 impl<'r, T> sqlx::Decode<'r, sqlx::MySql> for Id<T> {
     fn decode(value: sqlx::mysql::MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         Ok(Self::from_uuid(<Uuid as sqlx::Decode<sqlx::MySql>>::decode(value)?))
+    }
+}
+
+// ── sqlx (PostgreSQL): delegate to Uuid, so ids store as native UUID ────────
+// Postgres has a real UUID type, so there's no byte-vs-text choice to make: a
+// TEXT column holding uuids is a type mismatch, not an `Id<T>` column.
+#[cfg(feature = "postgres")]
+impl<T> sqlx::Type<sqlx::Postgres> for Id<T> {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <Uuid as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <Uuid as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+// `UUID[]`, so a `Vec<Id<T>>` binds for `WHERE id = ANY($1)`.
+#[cfg(feature = "postgres")]
+impl<T> sqlx::postgres::PgHasArrayType for Id<T> {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        <Uuid as sqlx::postgres::PgHasArrayType>::array_type_info()
+    }
+}
+#[cfg(feature = "postgres")]
+impl<T> sqlx::Encode<'_, sqlx::Postgres> for Id<T> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <Uuid as sqlx::Encode<'_, sqlx::Postgres>>::encode_by_ref(&self.raw, buf)
+    }
+}
+#[cfg(feature = "postgres")]
+impl<'r, T> sqlx::Decode<'r, sqlx::Postgres> for Id<T> {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        Ok(Self::from_uuid(<Uuid as sqlx::Decode<sqlx::Postgres>>::decode(value)?))
     }
 }
 
@@ -317,6 +352,27 @@ mod tests {
         assert_eq!(buf.len(), 17);
         assert_eq!(buf[0], 16);
         assert_eq!(&buf[1..], id.as_uuid().as_bytes());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn postgres_binds_as_native_uuid() {
+        use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
+        use sqlx::{Postgres, Type};
+        assert_eq!(<Id<Widget> as Type<Postgres>>::type_info(), PgTypeInfo::with_name("UUID"));
+        assert!(<Id<Widget> as Type<Postgres>>::compatible(&PgTypeInfo::with_name("UUID")));
+        assert!(!<Id<Widget> as Type<Postgres>>::compatible(&PgTypeInfo::with_name("TEXT")));
+        assert_eq!(
+            <Id<Widget> as PgHasArrayType>::array_type_info(),
+            <Uuid as PgHasArrayType>::array_type_info()
+        );
+        // Binary protocol: the 16 raw bytes, no length prefix.
+        let id = Id::<Widget>::new();
+        let mut buf = sqlx::postgres::PgArgumentBuffer::default();
+        let null = <Id<Widget> as sqlx::Encode<Postgres>>::encode_by_ref(&id, &mut buf)
+            .expect("encode");
+        assert!(matches!(null, sqlx::encode::IsNull::No));
+        assert_eq!(&buf[..], id.as_uuid().as_bytes());
     }
 
     #[cfg(feature = "poem-openapi")]
